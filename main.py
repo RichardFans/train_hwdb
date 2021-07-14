@@ -34,8 +34,8 @@ DECAY_RATE = 0.91
 use_Transfer_learning = True
 
 # build_net = build_net_EfficientNetB0_withoutPreTraining
-# IMGSIZ = 224
-IMGSIZ = 64
+IMGSIZ = 224
+# IMGSIZ = 64
 
 num_classes = 0
 
