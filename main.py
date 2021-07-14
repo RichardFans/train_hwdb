@@ -6,11 +6,11 @@ from tensorflow.keras.applications.efficientnet import EfficientNetB0
 from tensorflow import keras
 
 
-tfrecord_trn = '/root/data/hwdb_all/HWDB1.1trn_gnt.tfrecord'
-tfrecord_val = '/root/data/hwdb_all/HWDB1.1val_gnt.tfrecord'
-tfrecord_tst = '/root/data/hwdb_all/HWDB1.1tst_gnt.tfrecord'
-characters_file = '/root/data/hwdb_all/characters.txt'
-ckpt_path = '/root/data/hwdb_all/cn_ocr-{epoch}.ckpt'
+tfrecord_trn = '/root/data/hwdb-all/HWDB1.1trn_gnt.tfrecord'
+tfrecord_val = '/root/data/hwdb-all/HWDB1.1val_gnt.tfrecord'
+tfrecord_tst = '/root/data/hwdb-all/HWDB1.1tst_gnt.tfrecord'
+characters_file = '/root/data/hwdb-all/characters.txt'
+ckpt_path = '/root/data/hwdb-all/cn_ocr-{epoch}.ckpt'
 # BATCH_SIZE = 200
 # EPOCHS = 20
 BATCH_SIZE = 128
