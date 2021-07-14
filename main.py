@@ -10,7 +10,7 @@ tfrecord_trn = '/root/data/hwdb_all/HWDB1.1trn_gnt.tfrecord'
 tfrecord_val = '/root/data/hwdb_all/HWDB1.1val_gnt.tfrecord'
 tfrecord_tst = '/root/data/hwdb_all/HWDB1.1tst_gnt.tfrecord'
 characters_file = '/root/data/hwdb_all/characters.txt'
-ckpt_path = './root/data/cn_ocr-{epoch}.ckpt'
+ckpt_path = '/root/data/hwdb_all/cn_ocr-{epoch}.ckpt'
 # BATCH_SIZE = 200
 # EPOCHS = 20
 BATCH_SIZE = 128
@@ -109,6 +109,16 @@ def lr_scheduler(epoch, lr):
     return lr
 
 
+def printDataDir():
+    f = []
+    print(os.path.dirname(ckpt_path))
+    print('Data dir Path: ', os.path.dirname(ckpt_path))
+    for (dirpath, dirnames, filenames) in os.walk(os.path.dirname(ckpt_path)):
+        f.extend(filenames)
+        break
+    print('File in data dir: ', f)
+
+
 def train():
     all_characters = load_characters()
     num_classes = len(all_characters)
@@ -159,4 +169,5 @@ def train():
 
 
 if __name__ == "__main__":
+    printDataDir()
     train()
