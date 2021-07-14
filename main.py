@@ -2,10 +2,8 @@ from tensorflow.keras import layers
 import tensorflow as tf
 import sys
 import os
-from alfred.dl.tf.common import mute_tf
 from tensorflow.keras.applications.efficientnet import EfficientNetB0
 from tensorflow import keras
-mute_tf()
 
 
 tfrecord_trn = '/root/data/hwdb_all/HWDB1.1trn_gnt.tfrecord'
