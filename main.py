@@ -1,14 +1,8 @@
 from tensorflow.keras import layers
-import tensorflow_datasets as tfds
-from alfred.utils.log import logger as logging
 import tensorflow as tf
-import numpy as np
 import sys
 import os
-import cv2
 from alfred.dl.tf.common import mute_tf
-from tensorflow.keras.preprocessing.image import load_img, array_to_img
-from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.applications.efficientnet import EfficientNetB0
 from tensorflow import keras
 mute_tf()
@@ -120,14 +114,14 @@ def lr_scheduler(epoch, lr):
 def train():
     all_characters = load_characters()
     num_classes = len(all_characters)
-    logging.info('all characters: {}'.format(num_classes))
+    print('all characters: {}'.format(num_classes))
     trn_ds = load_ds(tfrecord_trn)
     val_ds = load_ds(tfrecord_val)
     tst_ds = load_ds(tfrecord_tst)
 
     model = build_net(num_classes)
     model.summary()
-    logging.info('model loaded.')
+    print('model loaded.')
 
     # The answer, in a nutshell
     # If your targets are one-hot encoded, use categorical_crossentropy.
@@ -155,7 +149,7 @@ def train():
         )
     except KeyboardInterrupt:
         # model.save_weights(ckpt_path.format(epoch=0))
-        logging.info('keras model saved.')
+        print('keras model saved.')
         sys.exit()
 
     score = model.evaluate(tst_ds, verbose=0)
