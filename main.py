@@ -96,7 +96,7 @@ def load_ds(ds_path):
 
 
 def load_characters():
-    a = open(characters_file, 'r').readlines()
+    a = open(characters_file, 'r', encoding='utf8').readlines()
     return [i.strip() for i in a]
 
 
