@@ -14,7 +14,7 @@ tfrecord_tst = '/root/data/hwdb-all/HWDB1.1tst_gnt.tfrecord'
 characters_file = '/root/data/hwdb-all/characters.txt'
 ckpt_path = '/root/data/hwdb-all/weights.best.hdf5'
 
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 EPOCHS = 30
 SHUFFLE_BUFSIZ = 4096
 INIT_LEARNING_RATE = 1e-2
