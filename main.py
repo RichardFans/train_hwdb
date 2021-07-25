@@ -4,38 +4,23 @@ import sys
 import os
 from tensorflow.keras.applications.efficientnet import EfficientNetB0
 from tensorflow import keras
+from tensorflow.python.keras.constraints import MaxNorm
+import tensorflow_addons as tfa
 
 
 tfrecord_trn = '/root/data/hwdb-all/HWDB1.1trn_gnt.tfrecord'
 tfrecord_val = '/root/data/hwdb-all/HWDB1.1val_gnt.tfrecord'
 tfrecord_tst = '/root/data/hwdb-all/HWDB1.1tst_gnt.tfrecord'
 characters_file = '/root/data/hwdb-all/characters.txt'
-ckpt_path = '/root/data/hwdb-all/cn_ocr-{epoch}.ckpt'
-# BATCH_SIZE = 200
-# EPOCHS = 20
-BATCH_SIZE = 128
-EPOCHS = 15
+ckpt_path = '/root/data/hwdb-all/weights.best.hdf5'
+
+BATCH_SIZE = 256
+EPOCHS = 30
 SHUFFLE_BUFSIZ = 4096
-# SHUFFLE_BUFSIZ = 256
-# INIT_LEARNING_RATE = 0.0003 # vgg16
+INIT_LEARNING_RATE = 1e-2
 
-# build_net=EfficientNetB0、EfficientNetB6 (unfreeze 20 layers), let use_Transfer_learning = True
-INIT_LEARNING_RATE = 2e-4
-
-# build_net=EfficientNetB0_withoutPreTraining、EfficientNetB6_withoutPreTraining, let use_Transfer_learning = False
-# INIT_LEARNING_RATE = 1e-3
-
-DECAY_STEP = 1
-# DECAY_RATE = 0.9
-DECAY_RATE = 0.91
-# build_net = build_net_vgg16
-# 是否采用迁移学习
-# use_Transfer_learning = False
-use_Transfer_learning = True
-
-# build_net = build_net_EfficientNetB0_withoutPreTraining
-IMGSIZ = 224
-# IMGSIZ = 64
+# IMGSIZ = 224
+IMGSIZ = 64
 
 num_classes = 0
 
@@ -44,13 +29,12 @@ def build_net_EfficientNetB0(n_classes):
     base_model = EfficientNetB0(weights='imagenet',
                                 input_shape=(IMGSIZ, IMGSIZ, 3),
                                 include_top=False)
-    base_model.trainable = False
 
     inputs = keras.Input(shape=(IMGSIZ, IMGSIZ, 3))
     x = base_model(inputs, training=False)
     x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dropout(0.5)(x)
     x = layers.BatchNormalization()(x)
-    x = layers.Dropout(0.2, name="top_dropout")(x)
 
     outputs = layers.Dense(n_classes, activation='softmax')(x)
     model = keras.Model(inputs, outputs)
@@ -77,11 +61,9 @@ def parse_example(record):
 
 
 def preprocess(x):
-    if use_Transfer_learning:
-        x['image'] = tf.expand_dims(x['image'], axis=-1)
-        x['image'] = tf.image.grayscale_to_rgb(x['image'])
-    else:
-        x['image'] = tf.expand_dims(x['image'], axis=-1)
+    x['image'] = tf.expand_dims(x['image'], axis=-1)
+    x['image'] = tf.image.grayscale_to_rgb(x['image'])
+
     x['image'] = tf.image.resize(x['image'], (IMGSIZ, IMGSIZ))  # TODO： 试一试
     x['image'] = x['image'] / 255.
     # x['label'] = tf.one_hot(x['label'], num_classes)
@@ -98,15 +80,6 @@ def load_ds(ds_path):
 def load_characters():
     a = open(characters_file, 'r', encoding='utf8').readlines()
     return [i.strip() for i in a]
-
-
-def lr_scheduler(epoch, lr):
-    decay_rate = DECAY_RATE
-    decay_step = DECAY_STEP
-    if epoch % decay_step == 0 and epoch:
-        # return lr * pow(decay_rate, np.floor(epoch / decay_step))
-        return lr * decay_rate
-    return lr
 
 
 def printDataDir():
@@ -131,29 +104,30 @@ def train():
     model.summary()
     print('model loaded.')
 
-    # The answer, in a nutshell
-    # If your targets are one-hot encoded, use categorical_crossentropy.
-    # But if your targets are integers, use sparse_categorical_crossentropy
-
-    if use_Transfer_learning:
-        for layer in model.layers[-20:]:
-            if not isinstance(layer, layers.BatchNormalization):
-                layer.trainable = True
-
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(
-            learning_rate=INIT_LEARNING_RATE),
+        optimizer=tfa.optimizers.RectifiedAdam(learning_rate=INIT_LEARNING_RATE,
+                                               min_lr=1e-7,
+                                               warmup_proportion=0.15),
         loss=tf.keras.losses.SparseCategoricalCrossentropy(),
         metrics=['accuracy'])
 
-    callbacks = [tf.keras.callbacks.LearningRateScheduler(
-        lr_scheduler, verbose=1)]
+    # Learning Rate Reducer
+    learn_control = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_acc',
+                                                         patience=5,
+                                                         verbose=1,
+                                                         factor=0.2,
+                                                         min_lr=1e-7)
+
+    # Checkpoint
+    checkpoint = tf.keras.callbacks.ModelCheckpoint(
+        ckpt_path, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+
     try:
         model.fit(
             trn_ds,
             validation_data=val_ds,
             epochs=EPOCHS, verbose=1,
-            callbacks=callbacks
+            callbacks=[learn_control, checkpoint]
         )
     except KeyboardInterrupt:
         # model.save_weights(ckpt_path.format(epoch=0))
