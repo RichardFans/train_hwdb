@@ -17,7 +17,7 @@ ckpt_path = '/root/data/hwdb-all/weights.best.hdf5'
 BATCH_SIZE = 128
 EPOCHS = 30
 SHUFFLE_BUFSIZ = 4096
-INIT_LEARNING_RATE = 1e-2
+INIT_LEARNING_RATE = 1e-3
 
 IMGSIZ = 224
 # IMGSIZ = 64
