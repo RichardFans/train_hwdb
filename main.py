@@ -31,7 +31,7 @@ def build_net_EfficientNetB0(n_classes):
                                 include_top=False)
 
     inputs = keras.Input(shape=(IMGSIZ, IMGSIZ, 3))
-    x = base_model(inputs, training=False)
+    x = base_model(inputs)
     x = layers.GlobalAveragePooling2D()(x)
     x = layers.Dropout(0.5)(x)
     x = layers.BatchNormalization()(x)
