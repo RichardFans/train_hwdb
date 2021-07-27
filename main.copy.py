@@ -6,34 +6,38 @@ from tensorflow.keras.applications.efficientnet import EfficientNetB0
 from tensorflow import keras
 from tensorflow.python.keras.constraints import MaxNorm
 import tensorflow_addons as tfa
-import effnetv2.effnetv2_model as effnetv2_model
 
 
 tfrecord_trn = '/root/data/hwdb-all/HWDB1.1trn_gnt.tfrecord'
 tfrecord_val = '/root/data/hwdb-all/HWDB1.1val_gnt.tfrecord'
 tfrecord_tst = '/root/data/hwdb-all/HWDB1.1tst_gnt.tfrecord'
 characters_file = '/root/data/hwdb-all/characters.txt'
-ckpt_path = '/root/data/hwdb-all/'
+ckpt_path = '/root/data/hwdb-all/weights.best.hdf5'
 
 BATCH_SIZE = 128
 EPOCHS = 30
 SHUFFLE_BUFSIZ = 4096
 INIT_LEARNING_RATE = 1e-2
 
-IMGSIZ = 224
-# IMGSIZ = 64
+# IMGSIZ = 224
+IMGSIZ = 64
 
 num_classes = 0
 
 
 def build_net_EfficientNetB0(n_classes):
-    model = tf.keras.models.Sequential([
-        tf.keras.layers.InputLayer(input_shape=[IMGSIZ, IMGSIZ, 3]),
-        effnetv2_model.get_model(
-            'efficientnetv2-b0', include_top=False),
-        tf.keras.layers.Dropout(rate=0.2),
-        tf.keras.layers.Dense(n_classes, activation='softmax'),
-    ])
+    base_model = EfficientNetB0(weights='imagenet',
+                                input_shape=(IMGSIZ, IMGSIZ, 3),
+                                include_top=False)
+
+    inputs = keras.Input(shape=(IMGSIZ, IMGSIZ, 3))
+    x = base_model(inputs)
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dropout(0.5)(x)
+    x = layers.BatchNormalization()(x)
+
+    outputs = layers.Dense(n_classes, activation='softmax')(x)
+    model = keras.Model(inputs, outputs)
     return model
 
 
@@ -116,21 +120,17 @@ def train():
 
     # Checkpoint
     checkpoint = tf.keras.callbacks.ModelCheckpoint(
-        os.path.join(ckpt_path, 'ckpt-{epoch:d}'),
-        monitor='val_accuracy', verbose=1, save_best_only=True,  save_weights_only=True,
-        mode='max')
-
-    tb_callback = tf.keras.callbacks.TensorBoard(
-        log_dir=ckpt_path, update_freq=100)
+        ckpt_path, monitor='val_accuracy', verbose=1, save_best_only=True, mode='max')
 
     try:
         model.fit(
             trn_ds,
             validation_data=val_ds,
             epochs=EPOCHS, verbose=1,
-            callbacks=[learn_control, checkpoint, tb_callback]
+            callbacks=[learn_control, checkpoint]
         )
     except KeyboardInterrupt:
+        # model.save_weights(ckpt_path.format(epoch=0))
         print('keras model saved.')
         sys.exit()
 
@@ -138,35 +138,10 @@ def train():
     print('Test score:', score[0])
     print('Test accuracy:', score[1])
 
-    model.save_weights(os.path.join(os.path.dirname(ckpt_path), 'cn_ocr.h5'))
+    model.save_weights(ckpt_path.format(epoch=0))
+    model.save(os.path.join(os.path.dirname(ckpt_path), 'cn_ocr.h5'))
 
 
 if __name__ == "__main__":
     printDataDir()
     train()
-
-# if __name__ == "__main__":
-#     all_characters = load_characters()
-#     num_classes = len(all_characters)
-#     print('all characters: {}'.format(num_classes))
-#     tst_ds = load_ds(tfrecord_tst)
-
-#     model = build_net(num_classes)
-
-#     model.compile(
-#         optimizer=tfa.optimizers.RectifiedAdam(learning_rate=INIT_LEARNING_RATE,
-#                                                min_lr=1e-7,
-#                                                warmup_proportion=0.15),
-#         loss=tf.keras.losses.SparseCategoricalCrossentropy(),
-#         metrics=['accuracy'])
-
-#     ckpt = tf.train.latest_checkpoint(ckpt_path)
-#     _ = model(tf.ones([1, 64, 64, 3]), training=False)
-#     model.load_weights(ckpt)
-#     model.load_weights(os.path.join(os.path.dirname(ckpt_path), 'cn_ocr.h5'))
-
-#     score = model.evaluate(tst_ds, verbose=0)
-#     print('Test score:', score[0])
-#     print('Test accuracy:', score[1])
-
-    # model.save_weights(os.path.join(os.path.dirname(ckpt_path), 'cn_ocr.h5'))
