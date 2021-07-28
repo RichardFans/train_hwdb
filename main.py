@@ -37,7 +37,7 @@ config = hparams.Config(
         model_name='efficientnetv2-s'
     ),
     train=dict(
-        batch_size=1024,
+        batch_size=256,
         isize=224
     ),
     eval=dict(
@@ -228,11 +228,12 @@ def main(_) -> None:
         train_size = config.train.isize
         eval_size = config.eval.isize
 
-        if config.runtime.mixed_precision:
-            image_dtype = 'bfloat16' if strategy == 'tpu' else 'float16'
-            precision = 'mixed_bfloat16' if strategy == 'tpu' else 'mixed_float16'
-            policy = tf.keras.mixed_precision.Policy(precision)
-            tf.keras.mixed_precision.set_global_policy(policy)
+        # 这坨代码在阿里云中tf版本执行不了
+        # if config.runtime.mixed_precision:
+        #     image_dtype = 'bfloat16' if strategy == 'tpu' else 'float16'
+        #     precision = 'mixed_bfloat16' if strategy == 'tpu' else 'mixed_float16'
+        #     policy = tf.keras.mixed_precision.Policy(precision)
+        #     tf.keras.mixed_precision.set_global_policy(policy)
 
         model = TrainableModel(
             config.model.model_name,
