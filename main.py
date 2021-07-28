@@ -13,12 +13,19 @@ import effnetv2.hparams as hparams
 import effnetv2.effnetv2_configs as effnetv2_configs
 import effnetv2.utils as utils
 
+useFeaturize = True
+if useFeaturize:
+    datapath = '/home/featurize/data/'
+    savepath = '/home/featurize/work/'
+else:
+    savepath = datapath = '/root/data/hwdb-all/'
 
-tfrecord_trn = '/root/data/hwdb-all/HWDB1.1trn_gnt.tfrecord'
-tfrecord_val = '/root/data/hwdb-all/HWDB1.1val_gnt.tfrecord'
-tfrecord_tst = '/root/data/hwdb-all/HWDB1.1tst_gnt.tfrecord'
-characters_file = '/root/data/hwdb-all/characters.txt'
-ckpt_path = '/root/data/hwdb-all/'
+
+tfrecord_trn = "{}HWDB1.1trn_gnt.tfrecord".format(datapath)
+tfrecord_val = "{}HWDB1.1val_gnt.tfrecord".format(datapath)
+tfrecord_tst = "{}HWDB1.1tst_gnt.tfrecord".format(datapath)
+characters_file = "{}characters.txt".format(datapath)
+ckpt_path = savepath
 
 # Currently, supported model_name includes:
 # efficientnetv2-s, efficientnetv2-m, efficientnetv2-l, efficientnetv2-b0,
