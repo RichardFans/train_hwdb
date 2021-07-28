@@ -13,7 +13,7 @@ import effnetv2.hparams as hparams
 import effnetv2.effnetv2_configs as effnetv2_configs
 import effnetv2.utils as utils
 
-useFeaturize = True
+useFeaturize = os.path.isdir('/home/featurize/')
 if useFeaturize:
     datapath = '/home/featurize/data/'
     savepath = '/home/featurize/work/'
