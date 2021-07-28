@@ -1,12 +1,17 @@
-from tensorflow.keras import layers
+import copy
+import re
+from tensorflow.keras import backend, layers
 import tensorflow as tf
 import sys
 import os
-from tensorflow.keras.applications.efficientnet import EfficientNetB0
 from tensorflow import keras
-from tensorflow.python.keras.constraints import MaxNorm
 import tensorflow_addons as tfa
+from absl import app, logging
 import effnetv2.effnetv2_model as effnetv2_model
+import effnetv2.datasets as datasets
+import effnetv2.hparams as hparams
+import effnetv2.effnetv2_configs as effnetv2_configs
+import effnetv2.utils as utils
 
 
 tfrecord_trn = '/root/data/hwdb-all/HWDB1.1trn_gnt.tfrecord'
@@ -15,29 +20,29 @@ tfrecord_tst = '/root/data/hwdb-all/HWDB1.1tst_gnt.tfrecord'
 characters_file = '/root/data/hwdb-all/characters.txt'
 ckpt_path = '/root/data/hwdb-all/'
 
-BATCH_SIZE = 128
-EPOCHS = 30
-SHUFFLE_BUFSIZ = 4096
-INIT_LEARNING_RATE = 1e-2
-
-IMGSIZ = 224
-# IMGSIZ = 64
-
-num_classes = 0
-
-
-def build_net_EfficientNetB0(n_classes):
-    model = tf.keras.models.Sequential([
-        tf.keras.layers.InputLayer(input_shape=[IMGSIZ, IMGSIZ, 3]),
-        effnetv2_model.get_model(
-            'efficientnetv2-b0', include_top=False),
-        tf.keras.layers.Dropout(rate=0.2),
-        tf.keras.layers.Dense(n_classes, activation='softmax'),
-    ])
-    return model
-
-
-build_net = build_net_EfficientNetB0
+# Currently, supported model_name includes:
+# efficientnetv2-s, efficientnetv2-m, efficientnetv2-l, efficientnetv2-b0,
+# efficientnetv2-b1, efficientnetv2-b2, efficientnetv2-b3.
+# We also support all EfficientNetV1 models including:
+# efficientnet-b0/b1/b2/b3/b4/b5/b6/b7/b8/l2
+config = hparams.Config(
+    model=dict(
+        model_name='efficientnetv2-s'
+    ),
+    train=dict(
+        batch_size=1024,
+        isize=224
+    ),
+    eval=dict(
+        isize=224,  # image size
+    ),
+    runtime=dict(
+        strategy='gpu'
+    ),
+    data=dict(
+        ds_name='hwdbcasia'
+    )
+)
 
 
 def parse_example(record):
@@ -58,18 +63,22 @@ def parse_example(record):
 
 def preprocess(x):
     x['image'] = tf.expand_dims(x['image'], axis=-1)
-    x['image'] = tf.image.resize(x['image'], (IMGSIZ, IMGSIZ))  # TODO： 试一试
+    if config.train.isize != 64:
+        x['image'] = tf.image.resize(
+            x['image'], (config.train.isize, config.train.isize))
     x['image'] = tf.image.grayscale_to_rgb(x['image'])
 
     x['image'] = x['image'] / 255.
-    # x['label'] = tf.one_hot(x['label'], num_classes)
+    x['label'] = tf.one_hot(x['label'], config.model.num_classes)
     return x['image'], x['label']
 
 
-def load_ds(ds_path):
+def load_ds(ds_path, repeat=True):
     ds = tf.data.TFRecordDataset([ds_path], compression_type="ZLIB")
     ds = ds.map(parse_example)
-    ds = ds.shuffle(SHUFFLE_BUFSIZ).map(preprocess).batch(BATCH_SIZE)
+    ds = ds.shuffle(16 * 1024).map(preprocess).batch(config.train.batch_size)
+    if repeat:
+        ds = ds.repeat()
     return ds
 
 
@@ -80,70 +89,235 @@ def load_characters():
 
 def printDataDir():
     f = []
-    print(os.path.dirname(ckpt_path))
-    print('Data dir Path: ', os.path.dirname(ckpt_path))
+    logging.info(os.path.dirname(ckpt_path))
+    logging.info('Data dir Path: %s', os.path.dirname(ckpt_path))
     for (dirpath, dirnames, filenames) in os.walk(os.path.dirname(ckpt_path)):
         f.extend(filenames)
         break
-    print('File in data dir: ', f)
+    logging.info('File in data dir: %s', f)
 
 
-def train():
-    all_characters = load_characters()
-    num_classes = len(all_characters)
-    print('all characters: {}'.format(num_classes))
+def build_tf2_optimizer(learning_rate,
+                        optimizer_name='rmsprop',
+                        decay=0.9,
+                        epsilon=0.001,
+                        momentum=0.9):
+    """Build optimizer."""
+    if optimizer_name == 'sgd':
+        logging.info('Using SGD optimizer')
+        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
+    elif optimizer_name == 'momentum':
+        logging.info('Using Momentum optimizer')
+        optimizer = tf.keras.optimizers.SGD(
+            learning_rate=learning_rate, momentum=momentum)
+    elif optimizer_name == 'rmsprop':
+        logging.info('Using RMSProp optimizer')
+        optimizer = tf.keras.optimizers.RMSprop(learning_rate, decay, momentum,
+                                                epsilon)
+    elif optimizer_name == 'adam':
+        logging.info('Using Adam optimizer')
+        optimizer = tf.keras.optimizers.Adam(learning_rate)
+    else:
+        raise Exception('Unknown optimizer: %s' % optimizer_name)
+
+    return optimizer
+
+
+class TrainableModel(effnetv2_model.EffNetV2Model):
+    """Wraps efficientnet to make a keras trainable model.
+
+    Handles efficientnet's multiple outputs and adds weight decay.
+    """
+
+    def __init__(self,
+                 model_name='efficientnetv2-s',
+                 model_config=None,
+                 name=None,
+                 weight_decay=0.0):
+        super().__init__(
+            model_name=model_name,
+            model_config=model_config,
+            name=name or model_name)
+
+        self.weight_decay = weight_decay
+
+    def _reg_l2_loss(self, weight_decay, regex=r'.*(kernel|weight):0$'):
+        """Return regularization l2 loss loss."""
+        var_match = re.compile(regex)
+        return weight_decay * tf.add_n([
+            tf.nn.l2_loss(v)
+            for v in self.trainable_variables
+            if var_match.match(v.name)
+        ])
+
+    def train_step(self, data):
+        images, labels = data
+
+        with tf.GradientTape() as tape:
+            pred = self(images, training=True)
+            pred = tf.cast(pred, tf.float32)
+            loss = self.compiled_loss(
+                labels,
+                pred,
+                regularization_losses=[self._reg_l2_loss(self.weight_decay)])
+
+        self.optimizer.minimize(loss, self.trainable_variables, tape=tape)
+        self.compiled_metrics.update_state(labels, pred)
+        return {m.name: m.result() for m in self.metrics}
+
+    def test_step(self, data):
+        images, labels = data
+
+        pred = self(images, training=False)
+        pred = tf.cast(pred, tf.float32)
+
+        self.compiled_loss(
+            labels,
+            pred,
+            regularization_losses=[self._reg_l2_loss(self.weight_decay)])
+
+        self.compiled_metrics.update_state(labels, pred)
+        return {m.name: m.result() for m in self.metrics}
+
+
+def main(_) -> None:
+    cfg = copy.deepcopy(hparams.base_config)
+    cfg.override(effnetv2_configs.get_model_config(config.model.model_name))
+    cfg.override(datasets.get_dataset_config(config.data.ds_name))
+    cfg.model.num_classes = cfg.data.num_classes
+    cfg.override(config)
+    config.update(cfg)
+
+    # load data
+    # all_characters = load_characters()
     trn_ds = load_ds(tfrecord_trn)
     val_ds = load_ds(tfrecord_val)
-    tst_ds = load_ds(tfrecord_tst)
+    tst_ds = load_ds(tfrecord_tst, repeat=False)
 
-    model = build_net(num_classes)
-    model.summary()
-    print('model loaded.')
+    strategy = config.runtime.strategy
+    if strategy == 'tpu' and not config.model.bn_type:
+        config.model.bn_type = 'tpu_bn'
 
-    model.compile(
-        optimizer=tfa.optimizers.RectifiedAdam(learning_rate=INIT_LEARNING_RATE,
-                                               min_lr=1e-7,
-                                               warmup_proportion=0.15),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(),
-        metrics=['accuracy'])
+    # log and save config.
+    logging.info('config=%s', str(config))
+    config.save_to_yaml(os.path.join(ckpt_path, 'config.yaml'))
 
-    # Learning Rate Reducer
-    learn_control = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_accuracy',
-                                                         patience=5,
-                                                         verbose=1,
-                                                         factor=0.2,
-                                                         min_lr=1e-7)
+    # 暂时不管TPU
+    if strategy == 'gpus':
+        ds_strategy = tf.distribute.MirroredStrategy()
+        logging.info('All devices: %s', tf.config.list_physical_devices('GPU'))
+    else:
+        if tf.config.list_physical_devices('GPU'):
+            ds_strategy = tf.distribute.MirroredStrategy(['GPU:0'])
+        else:
+            ds_strategy = tf.distribute.MirroredStrategy(['CPU:0'])
 
-    # Checkpoint
-    checkpoint = tf.keras.callbacks.ModelCheckpoint(
-        os.path.join(ckpt_path, 'ckpt-{epoch:d}'),
-        monitor='val_accuracy', verbose=1, save_best_only=True,  save_weights_only=True,
-        mode='max')
+    with ds_strategy.scope():
+        train_split = config.train.split or 'train'
+        eval_split = config.eval.split or 'eval'
+        num_train_images = config.data.splits[train_split].num_images
+        num_eval_images = config.data.splits[eval_split].num_images
 
-    tb_callback = tf.keras.callbacks.TensorBoard(
-        log_dir=ckpt_path, update_freq=100)
+        train_size = config.train.isize
+        eval_size = config.eval.isize
 
-    try:
-        model.fit(
-            trn_ds,
-            validation_data=val_ds,
-            epochs=EPOCHS, verbose=1,
-            callbacks=[learn_control, checkpoint, tb_callback]
+        if config.runtime.mixed_precision:
+            image_dtype = 'bfloat16' if strategy == 'tpu' else 'float16'
+            precision = 'mixed_bfloat16' if strategy == 'tpu' else 'mixed_float16'
+            policy = tf.keras.mixed_precision.Policy(precision)
+            tf.keras.mixed_precision.set_global_policy(policy)
+
+        model = TrainableModel(
+            config.model.model_name,
+            config.model,
+            weight_decay=config.train.weight_decay)
+
+        if config.train.ft_init_ckpt:  # load pretrained ckpt for finetuning.
+            model(tf.keras.Input([None, None, 3]))
+            ckpt = config.train.ft_init_ckpt
+            utils.restore_tf2_ckpt(
+                model, ckpt, exclude_layers=('_fc', 'optimizer'))
+
+        steps_per_epoch = num_train_images // config.train.batch_size
+        total_steps = steps_per_epoch * config.train.epochs
+
+        scaled_lr = config.train.lr_base * (config.train.batch_size / 256.0)
+        scaled_lr_min = config.train.lr_min * (config.train.batch_size / 256.0)
+
+        logging.info("Initial Learning Rate: %f", scaled_lr)
+
+        learning_rate = utils.WarmupLearningRateSchedule(
+            scaled_lr,
+            steps_per_epoch=steps_per_epoch,
+            decay_epochs=config.train.lr_decay_epoch,
+            warmup_epochs=config.train.lr_warmup_epoch,
+            decay_factor=config.train.lr_decay_factor,
+            lr_decay_type=config.train.lr_sched,
+            total_steps=total_steps,
+            minimal_lr=scaled_lr_min)
+
+        optimizer = build_tf2_optimizer(
+            learning_rate, optimizer_name=config.train.optimizer)
+
+        model.compile(
+            optimizer=optimizer,
+            loss=tf.keras.losses.CategoricalCrossentropy(
+                label_smoothing=config.train.label_smoothing, from_logits=True),
+            metrics=[
+                tf.keras.metrics.TopKCategoricalAccuracy(k=1, name='acc_top1'),
+                tf.keras.metrics.TopKCategoricalAccuracy(k=5, name='acc_top5')
+            ],
         )
-    except KeyboardInterrupt:
-        print('keras model saved.')
-        sys.exit()
 
-    score = model.evaluate(tst_ds, verbose=0)
-    print('Test score:', score[0])
-    print('Test accuracy:', score[1])
+        ckpt_callback = tf.keras.callbacks.ModelCheckpoint(
+            os.path.join(ckpt_path, 'ckpt-{epoch:d}'), verbose=1,  save_weights_only=True)
 
-    model.save_weights(os.path.join(os.path.dirname(ckpt_path), 'cn_ocr.h5'))
+        tb_callback = tf.keras.callbacks.TensorBoard(
+            log_dir=ckpt_path, update_freq=100)
+
+        class LearningRateLogCallback(tf.keras.callbacks.Callback):
+            def __init__(self) -> None:
+                super().__init__()
+                self.freq = steps_per_epoch // 10
+                self.step = 0
+
+            def on_epoch_begin(self, epoch, logs):
+                self.epoch = epoch
+
+            def on_train_batch_begin(self, batch, logs=None):
+                if batch % self.freq == 0:
+                    lr = tf.keras.backend.get_value(
+                        self.model.optimizer.lr(
+                            self.model.optimizer.iterations)
+                    )
+                    tf.summary.scalar('Learning rate', data=lr, step=self.step)
+                    self.step += 1
+
+        lr_log_callback = LearningRateLogCallback()
+
+        try:
+            model.fit(
+                trn_ds,
+                epochs=config.train.epochs,
+                steps_per_epoch=steps_per_epoch,
+                validation_data=val_ds,
+                validation_steps=num_eval_images // config.eval.batch_size,
+                verbose=1,
+                callbacks=[ckpt_callback, tb_callback, lr_log_callback]
+            )
+        except KeyboardInterrupt:
+            sys.exit()
+
+        score = model.evaluate(tst_ds, verbose=0)
+        logging.info('Test score: %f', score[0])
+        logging.info('Test accuracy: %f', score[1])
+
+        model.save_weights(os.path.join(
+            os.path.dirname(ckpt_path), 'cn_ocr.h5'))
 
 
 if __name__ == "__main__":
-    printDataDir()
-    train()
+    app.run(main)
 
 # if __name__ == "__main__":
 #     all_characters = load_characters()
